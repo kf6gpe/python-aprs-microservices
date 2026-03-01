@@ -1,0 +1,37 @@
+#
+# APRS Microservices Configuration
+#
+
+
+# Garmin MapShare KML feed URL. Used by garmin-aprsis-bridge.py
+# Replace <ID> with your MapShare ID.
+MapShareURL: "https://share.garmin.com/Feed/Share/<ID>"
+
+# Tempest Weather Station configuration (used by update-weather-aprsis.py)
+# Replace <ID> with your station ID, which you can get from your Tempest
+# Weather station settings
+TempestStationID: "<ID>"
+# Replace <APIKEY> with your Tempest API key from
+# https://weatherflow.github.io/Tempest/api/
+TempestAPIKey: "<APIKEY>"
+
+# Weather station callsign (used by update-weather-aprsis.py)
+# This is used to identify your APRS weather station.
+# Replace N0CALL with your callsign
+WXCallSign: "N0CALL"
+
+# Mobile/portable callsign with SSID (used by garmin-aprsis-bridge.py)
+# Replace N0CALL-9 with your mobile callsign --- say, N0CALL-9.
+# This should not be the same as your Tempest Weather Station if you
+# are using update-weather-aprsis.py, because that will transmit your
+# position for you regularly, and the notion of your local & your
+# Garmin InReach / MapShare position packets will fight each other.
+MobileCallSign: "N0CALL-9"
+
+# APRS-IS passcode, the five-digit code you use to access the APRIS-IS network.
+# Replace <PASSCODE> with your passcode.
+Passcode: "<PASSCODE>
+
+"
+
+
