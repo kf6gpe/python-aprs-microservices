@@ -51,7 +51,7 @@ It runs one-shot; to run it as a service you'll need
 to establish a crontab entry like this:
 
 ```
-*/30 * * * *  /home/kf6gpe/python-tempestwx-aprsis.py
+*/30 * * * *  /home/kf6gpe/update-weather-aprsis.py
 ```
 
 This will run it every ten minutes. You should use a sensible interval for
