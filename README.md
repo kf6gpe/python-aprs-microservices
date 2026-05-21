@@ -66,7 +66,7 @@ information:
 - `MapShareURL`. The Map Share URL provided by [Garmin Explore](https://explore.garmin.com/Social)
 - `TempestStationID`. Your Tempest Station ID.
 - `TempestAPIKey`. Your Tempest API key, which you can get from the
-[Tempest Developer Web site](https://explore.garmin.com/Social)
+[Tempest Developer Web site](https://apidocs.tempestwx.com/reference/quick-start)
 - `WXCallSign`. The callsign you'd like to use for your weather station.
 - `MobileCallSign`. The callsign you'd like to use for the Map Explore position
 reporting.
