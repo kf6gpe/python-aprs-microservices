@@ -13,7 +13,7 @@ they've only been tested under Linux. (They're known to work
 on a Google Cloud VM, which is where I host them for
 kf6gpe.org).
 
-## The Garmin Map Explore Service Bridge.
+## The Garmin Map Explore Service Bridge
 
 `garmin-apris-bridge.py`
 
