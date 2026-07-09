@@ -38,6 +38,27 @@ this in your crontab:
 @reboot (cd /home/kf6gpe ; /home/kf6gpe/garmin-aprsis-bridge.py &)
 ```
 
+## A one-shot version of the Garmin Map Explore Bridge
+
+`garmin-aprsis.py`
+
+This script does a one-shot fire and forget lookup of
+the configured callsign on aprs.fi and compares the
+last position of that callsign with the Garmin
+Map Explore feed for the given station. If the
+Garmin Map Explore position is more recent, it
+sends that along to the APRSIS; otherwise it
+does nothing.
+
+You could use this script as a one-shot, or add it to your
+crontab with something like:
+
+```
+*/15 * * * *  /home/kf6gpe/garmin-aprsis.py
+```
+
+
+
 ## Tempest Weather Station Service Utility
 
 Tempest provides a back-end Web API for their series of
