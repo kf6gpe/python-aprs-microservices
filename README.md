@@ -85,7 +85,7 @@ To configure the scripts, edit `config.yaml` with the following
 information:
 
 - `MapShareURL`. The Map Share URL provided by [Garmin Explore](https://explore.garmin.com/Social)
-- `APRSFIApiKey`. Your APRS-IS API key
+- `APRSFIApiKey`. Your APRS-IS API key from https://www.aprs.fi.
 - `TempestStationID`. Your Tempest Station ID.
 - `TempestAPIKey`. Your Tempest API key, which you can get from the
 [Tempest Developer Web site](https://apidocs.tempestwx.com/reference/quick-start)
