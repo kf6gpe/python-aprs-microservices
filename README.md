@@ -94,6 +94,9 @@ data.
 
 ## Configuration
 
+Copy `config.yaml.example` to `config.yaml`, which is deliberately not
+tracked by git so your keys and passcode stay off GitHub.
+
 To configure the scripts, edit `config.yaml` with the following
 information:
 

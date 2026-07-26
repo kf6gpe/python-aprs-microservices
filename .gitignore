@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
 
+# Your own configuration, with live API keys and your APRS passcode in it.
+# Copy config.yaml.example to config.yaml and edit that.
+config.yaml
+
 # Written by garmin-aprsis.py to remember the last Garmin fix it gated.
 .garmin-aprsis-state.json
