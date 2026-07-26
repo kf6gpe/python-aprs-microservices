@@ -3,9 +3,22 @@
 Garmin Explore KML to APRS-IS one-shot bridge
 
 Fetches the most recent position from a Garmin Explore MapShare KML feed and
-gates it to APRS-IS if it is more recent than the last position reported for the
-transmit callsign on aprs.fi. Unlike garmin-aprsis-bridge.py, this does its work
-once and then exits, making it suitable for periodic invocation from cron.
+gates it to APRS-IS if it is newer than what has already been reported for the
+transmit callsign. Unlike garmin-aprsis-bridge.py, this does its work once and
+then exits, making it suitable for periodic invocation from cron.
+
+"Newer" is decided against two different clocks, because they are not
+comparable:
+
+  * Against our own previous run, using the Garmin fix timestamp recorded in a
+    small state file next to this script. aprs.fi reports when a packet was
+    *heard*, not the fix time carried in its payload, so comparing the KML fix
+    time against aprs.fi's timestamp for a packet we ourselves gated always
+    looks "older" and silently drops fixes.
+  * Against a genuinely different source for the same callsign (a real radio
+    beaconing KF6GPE-9, say), looked up on aprs.fi. If something else has
+    reported more recently, we leave it alone rather than clobbering a live
+    position with a laggier Garmin fix.
 
 The last-known APRS position is looked up via the aprs.fi API, which requires a
 free API key (see https://aprs.fi/page/api). Put it in config.yaml as
@@ -19,6 +32,8 @@ For example, to run every five minutes, put something like this in your crontab:
 This file provided under the MIT License.
 """
 
+import json
+import os
 import requests
 import socket
 import time
@@ -36,6 +51,10 @@ import yaml
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Comment attached to every packet we gate. Also how we recognize our own
+# packets when they come back to us from aprs.fi.
+GATE_COMMENT = "Garmin Explore"
+
 
 @dataclass
 class PositionData:
@@ -46,6 +65,7 @@ class PositionData:
     timestamp: datetime
     velocity_kmh: Optional[float] = None
     course_degrees: Optional[float] = None
+    comment: Optional[str] = None
 
     def __str__(self):
         return f"Position({self.latitude:.6f}, {self.longitude:.6f}, alt={self.altitude_m:.1f}m, time={self.timestamp.isoformat()})"
@@ -207,8 +227,11 @@ class AprsFiClient:
         try:
             latitude = float(entry["lat"])
             longitude = float(entry["lng"])
-            # aprs.fi timestamps are unix epoch seconds in UTC. Prefer lasttime
-            # (last heard) and fall back to time (position timestamp).
+            # aprs.fi timestamps are unix epoch seconds in UTC, and both of
+            # these are when the packet was *heard* by the network -- not the
+            # fix time carried in a timestamped (@DDHHMMz) payload. They are
+            # therefore only meaningful against wall clock time, never against
+            # a Garmin fix timestamp.
             epoch = int(entry.get("lasttime") or entry["time"])
             timestamp = datetime.fromtimestamp(epoch, tz=timezone.utc)
 
@@ -225,6 +248,7 @@ class AprsFiClient:
                 timestamp=timestamp,
                 velocity_kmh=float(speed) if speed is not None else None,
                 course_degrees=float(course) if course is not None else None,
+                comment=entry.get("comment"),
             )
             logger.info(f"aprs.fi last position: {position}")
             return position
@@ -427,11 +451,67 @@ class APRSISClient:
                 self.connected = False
 
 
+class LastGatedStore:
+    """Remembers the Garmin fix timestamp of the last position we gated.
+
+    We can't recover this from aprs.fi -- it reports when a packet was heard,
+    not the fix time inside it -- so a one-shot run needs to write it down.
+    """
+
+    def __init__(self, state_path: Path):
+        self.state_path = Path(state_path)
+
+    def load(self) -> Optional[datetime]:
+        """Return the last gated fix time, or None if we have no record"""
+        try:
+            with open(self.state_path, 'r') as f:
+                state = json.load(f)
+            timestamp = datetime.fromisoformat(state['last_gated_fix'])
+        except FileNotFoundError:
+            logger.info(f"No state file at {self.state_path}, treating this as a first run")
+            return None
+        except (ValueError, KeyError, TypeError, OSError) as e:
+            logger.warning(f"Ignoring unreadable state file {self.state_path}: {e}")
+            return None
+
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        logger.debug(f"Last gated fix: {timestamp.isoformat()}")
+        return timestamp
+
+    def save(self, position: PositionData):
+        """Record the fix we just gated"""
+        state = {
+            'last_gated_fix': position.timestamp.astimezone(timezone.utc).isoformat(),
+            'latitude': position.latitude,
+            'longitude': position.longitude,
+        }
+        # Write and rename, so a run killed mid-write (cron reboot, say) can't
+        # leave a truncated file behind.
+        tmp_path = self.state_path.with_suffix('.json.tmp')
+        try:
+            with open(tmp_path, 'w') as f:
+                json.dump(state, f)
+            os.replace(tmp_path, self.state_path)
+            logger.debug(f"Recorded last gated fix in {self.state_path}")
+        except OSError as e:
+            # Not fatal, but it means every run re-sends the current fix, so
+            # say so loudly enough to be spotted in the cron log.
+            logger.error(f"Failed to write state file {self.state_path}: {e}")
+            logger.error("Position de-duplication will not work until this is fixed; "
+                         "the directory needs to be writable by the user running this script")
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
 class GarminAPRSBridge:
     """One-shot bridge between a Garmin Explore KML feed and APRS-IS"""
 
     def __init__(self, callsign: str, passcode: str, kml_feed_url: str,
-                 transmit_callsign: str, aprsfi_api_key: str):
+                 transmit_callsign: str, aprsfi_api_key: str,
+                 state_path: Path = None):
         self.callsign = callsign.upper()
         self.passcode = passcode
         self.kml_parser = GarminExploreKMLParser(kml_feed_url)
@@ -439,6 +519,9 @@ class GarminAPRSBridge:
 
         self.aprs_client = APRSISClient(callsign, passcode)
         self.aprsfi_client = AprsFiClient(aprsfi_api_key)
+        if state_path is None:
+            state_path = Path(__file__).parent / ".garmin-aprsis-state.json"
+        self.state = LastGatedStore(state_path)
 
     def _connect_and_auth(self) -> bool:
         """Connect and authenticate to APRS-IS for transmitting"""
@@ -462,7 +545,7 @@ class GarminAPRSBridge:
         packet = self.aprs_client.format_position_packet(
             self.transmit_callsign,  # Transmit with the designated SSID
             position,
-            comment="Garmin Explore"
+            comment=GATE_COMMENT
         )
 
         if self.aprs_client.send_packet(packet):
@@ -491,18 +574,7 @@ class GarminAPRSBridge:
             logger.warning("No KML position available, nothing to do")
             return True
 
-        # Look up the last-known APRS position for the transmit callsign via
-        # aprs.fi to decide whether the KML fix is worth gating.
-        last_aprs_position = self.aprsfi_client.get_last_position(self.transmit_callsign)
-
-        if last_aprs_position is None:
-            logger.info("No APRS position on aprs.fi, transmitting KML position")
-        elif kml_position.timestamp > last_aprs_position.timestamp:
-            logger.info(f"KML position ({kml_position.timestamp}) is newer than last "
-                        f"APRS position ({last_aprs_position.timestamp}), transmitting")
-        else:
-            logger.info(f"Last APRS position ({last_aprs_position.timestamp}) is newer or "
-                        f"equal to KML ({kml_position.timestamp}), not transmitting")
+        if not self._should_transmit(kml_position):
             return True
 
         # We have something newer to send; connect only now.
@@ -511,10 +583,78 @@ class GarminAPRSBridge:
             return False
 
         try:
-            self._transmit_position(kml_position)
+            if self._transmit_position(kml_position):
+                self.state.save(kml_position)
             return True
         finally:
             self.aprs_client.disconnect()
+
+    def _should_transmit(self, kml_position: PositionData) -> bool:
+        """Decide whether this Garmin fix is newer than what's already out there.
+
+        Two comparisons, against two clocks that can't be mixed: our own record
+        of the last fix we gated (fix time vs fix time), and aprs.fi's last
+        heard time for anything *else* beaconing this callsign (fix time vs
+        wall clock).
+        """
+        # Have we already gated this exact fix? The Garmin feed repeats the
+        # most recent position until the device sends a new one.
+        last_gated = self.state.load()
+        if last_gated is not None and kml_position.timestamp <= last_gated:
+            logger.info(f"KML fix ({kml_position.timestamp.isoformat()}) is not newer than the "
+                        f"last one gated ({last_gated.isoformat()}), not transmitting")
+            return False
+
+        last_aprs_position = self.aprsfi_client.get_last_position(self.transmit_callsign)
+
+        if last_aprs_position is None:
+            logger.info("No APRS position on aprs.fi, transmitting KML position")
+            return True
+
+        if last_aprs_position.comment == GATE_COMMENT:
+            # This is one of our own gated packets coming back to us. Its
+            # aprs.fi timestamp is when it was heard, which is always after the
+            # fix time inside it, so comparing against the KML fix time would
+            # wrongly reject good positions. The state file above is what
+            # governs this case.
+            if last_gated is None:
+                # First run since the state file was introduced: don't re-gate
+                # a position we can see we already sent.
+                if self._same_point(kml_position, last_aprs_position):
+                    logger.info("aprs.fi already shows this Garmin position, not transmitting")
+                    return False
+                logger.info("No local state yet and aprs.fi shows a different Garmin "
+                            "position, transmitting")
+            else:
+                logger.info(f"KML fix ({kml_position.timestamp.isoformat()}) is newer than the "
+                            f"last one gated ({last_gated.isoformat()}), transmitting")
+            return True
+
+        # Something other than this bridge is reporting for the callsign -- a
+        # real radio, most likely. Its heard time is honest wall clock time, so
+        # defer to it if it beat us to the punch rather than clobbering a live
+        # position with a laggier Garmin fix.
+        if kml_position.timestamp > last_aprs_position.timestamp:
+            logger.info(f"KML position ({kml_position.timestamp.isoformat()}) is newer than the "
+                        f"last APRS position ({last_aprs_position.timestamp.isoformat()}), "
+                        f"transmitting")
+            return True
+
+        logger.info(f"Last APRS position ({last_aprs_position.timestamp.isoformat()}) is newer "
+                    f"or equal to KML ({kml_position.timestamp.isoformat()}), not transmitting")
+        return False
+
+    @staticmethod
+    def _same_point(a: PositionData, b: PositionData, tolerance_deg: float = 0.0005) -> bool:
+        """Are two positions the same fix?
+
+        The tolerance (~55 m) has to clear APRS quantization, not GPS error: an
+        APRS position carries hundredths of a minute, or 0.000167 degrees, so a
+        fix that survives a round trip through a packet and back out of aprs.fi
+        can differ from the KML original by more than a GPS-sized epsilon.
+        """
+        return (abs(a.latitude - b.latitude) < tolerance_deg
+                and abs(a.longitude - b.longitude) < tolerance_deg)
 
 
 def load_config(config_path: str = None) -> dict:
