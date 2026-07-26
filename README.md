@@ -42,13 +42,26 @@ this in your crontab:
 
 `garmin-aprsis.py`
 
-This script does a one-shot fire and forget lookup of
-the configured callsign on aprs.fi and compares the
-last position of that callsign with the Garmin
-Map Explore feed for the given station. If the
-Garmin Map Explore position is more recent, it
-sends that along to the APRSIS; otherwise it
-does nothing.
+This script does a one-shot fire and forget check of the
+Garmin Map Explore feed for the given station, and sends
+the position along to APRS-IS if it's newer than what has
+already been reported for the configured callsign;
+otherwise it does nothing.
+
+It records the fix time of each position it gates in
+`.garmin-aprsis-state.json`, alongside the script. That
+file is how it knows whether a fix is new: aprs.fi
+reports when a packet was *heard*, not the fix time in
+its payload, so a packet this script gated always looks
+newer on aprs.fi than the Garmin fix it carries. Delete
+the file to make the next run re-send the current
+position.
+
+It still checks aprs.fi, to spot a *different* source
+reporting for the same callsign --- a real radio
+beaconing KF6GPE-9, say. If something else has reported
+more recently, the script leaves it alone rather than
+clobbering a live position with a laggier Garmin fix.
 
 You could use this script as a one-shot, or add it to your
 crontab with something like:
