@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# Written by garmin-aprsis.py to remember the last Garmin fix it gated.
+.garmin-aprsis-state.json
