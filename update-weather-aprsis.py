@@ -18,7 +18,7 @@ import requests
 import json
 import socket
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 from pathlib import Path
 import logging
@@ -130,13 +130,15 @@ class TempestWeatherStation:
         
         # Build weather data dictionary
         weather_data = {
-            'timestamp': datetime.fromtimestamp(safe_get('timestamp', 0)),
+            'timestamp': datetime.fromtimestamp(safe_get('timestamp', 0), tz=timezone.utc),
             'wind_direction': int(wind_direction) if wind_direction is not None else 0,
             'wind_speed_mph': round(ms_to_mph(wind_avg)) if wind_avg is not None else 0,
             'wind_gust_mph': round(ms_to_mph(wind_gust)) if wind_gust is not None else None,
             'temperature_f': round(celsius_to_fahrenheit(temperature_c)) if temperature_c is not None else 0,
             'humidity_percent': int(humidity) if humidity is not None else 0,
-            'pressure_mb': pressure_mb if pressure_mb is not None else 0,
+            # Left as None when the station doesn't report it, so the packet can
+            # omit the field rather than claim a barometric pressure of zero.
+            'pressure_mb': pressure_mb,
             'solar_radiation': int(solar_radiation) if solar_radiation is not None else 0,
             'rain_1hr_hundredths': round(mm_to_inches_hundredths(rain_1hr)) if rain_1hr is not None else 0,
         }
@@ -242,7 +244,12 @@ class APRSClient:
         if wind_gust is not None and wind_gust > 0:
             weather_str += f"g{wind_gust:03d}"
         
-        # Add temperature, rain, humidity, pressure, luminosity
+        # Add temperature, rain, humidity, pressure, luminosity.
+        # Each of these is a fixed-width field, so anything that doesn't fit has
+        # to be clamped -- an extra character shifts everything after it and the
+        # overflow ends up parsed as part of the comment.
+        temp = max(-99, min(999, temp))
+        rain = max(0, min(999, rain))
         weather_str += f"t{temp:03d}r{rain:03d}"
         
         # Format humidity (100% = 00, 0% = 01, others as-is)
@@ -254,11 +261,28 @@ class APRSClient:
             humidity_aprs = min(99, max(1, humidity))
         
         weather_str += f"h{humidity_aprs:02d}"
-        weather_str += f"b{int(pressure * 10):05d}"  # Convert to tenths of millibars
-        weather_str += f"l{solar:04d}"
+
+        # Barometric pressure, in tenths of a millibar. Omitted entirely when
+        # the station doesn't report it; sending b00000 would look like a real
+        # reading of zero rather than missing data.
+        if pressure is not None:
+            weather_str += f"b{min(99999, max(0, int(pressure * 10))):05d}"
+
+        # Luminosity is a three digit field: 'L' carries 0-999 W/m^2, and 'l'
+        # carries 1000-1999 as the value less 1000. Emitting four digits here
+        # pushed the extra one past the end of the field, where receivers read
+        # it as the first character of the comment -- the stray leading zero
+        # in "0Tempest Weather Station" on aprs.fi.
+        solar = max(0, min(1999, solar))
+        if solar < 1000:
+            weather_str += f"L{solar:03d}"
+        else:
+            weather_str += f"l{solar - 1000:03d}"
         
         # Create timestamp
-        now = datetime.utcnow()
+        # utcnow() is deprecated as of Python 3.12 and returns a naive
+        # datetime; ask for UTC explicitly.
+        now = datetime.now(timezone.utc)
         timestamp = f"{now.day:02d}{now.hour:02d}{now.minute:02d}z"
         
         # Build complete packet
@@ -325,7 +349,9 @@ class TempestAPRSBridge:
         logger.info(f"  Wind: {weather['wind_direction']}° at {weather['wind_speed_mph']} mph")
         if weather.get('wind_gust_mph'):
             logger.info(f"  Wind gust: {weather['wind_gust_mph']} mph")
-        logger.info(f"  Pressure: {weather['pressure_mb']:.1f} mb")
+        pressure_mb = weather['pressure_mb']
+        logger.info(f"  Pressure: {pressure_mb:.1f} mb" if pressure_mb is not None
+                    else "  Pressure: not reported")
         
         # Connect to APRS-IS
         if not self.aprs.connect():
