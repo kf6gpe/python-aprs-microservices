@@ -26,16 +26,22 @@ APRSFIApiKey.
 
 For example, to run every five minutes, put something like this in your crontab:
 
-*/5 * * * * (cd /home/kf6gpe ; /home/kf6gpe/garmin-aprsis.py >> /home/kf6gpe/garmin-aprsis.log 2>&1)
+*/5 * * * * /home/kf6gpe/garmin-aprsis.py --quiet --log-file /home/kf6gpe/garmin-aprsis.log
+
+--quiet keeps routine progress off stderr, so cron only mails you when there's
+a warning or an error to read; --log-file keeps the full history anyway. The
+script exits non-zero if it couldn't do its job.
 
 (C) 2026 Ray Rischpater, KF6GPE.
 This file provided under the MIT License.
 """
 
+import argparse
 import json
 import os
 import requests
 import socket
+import sys
 import time
 import threading
 import xml.etree.ElementTree as ET
@@ -693,14 +699,59 @@ def load_config(config_path: str = None) -> dict:
     return config
 
 
-def main():
-    """Main entry point"""
+def configure_logging(quiet: bool = False, log_file: str = None):
+    """Route log output for interactive use or for cron.
+
+    Under cron, anything a job writes gets mailed to you, so a script that
+    chatters at INFO on every run mails you every run. With --quiet only
+    warnings and errors reach stderr, which leaves cron silent unless
+    something actually went wrong, while --log-file keeps the full history
+    somewhere you can read it afterwards.
+    """
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    if quiet:
+        for handler in root.handlers:
+            handler.setLevel(logging.WARNING)
+
+    if log_file:
+        try:
+            file_handler = logging.FileHandler(log_file)
+        except OSError as e:
+            logger.error(f"Cannot write log file {log_file}: {e}")
+            return
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        root.addHandler(file_handler)
+
+
+def parse_args(argv=None):
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Gate the most recent Garmin Explore position to APRS-IS.")
+    parser.add_argument(
+        '-q', '--quiet', action='store_true',
+        help="Only write warnings and errors to stderr, so a cron job stays "
+             "silent unless something goes wrong.")
+    parser.add_argument(
+        '-l', '--log-file', metavar='PATH',
+        help="Append the full log, including routine INFO messages, to PATH.")
+    return parser.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    """Main entry point. Returns a process exit status: 0 on success."""
+    args = parse_args(argv)
+    configure_logging(quiet=args.quiet, log_file=args.log_file)
+
     # Load configuration from YAML file
     try:
         config = load_config()
     except (FileNotFoundError, ValueError) as e:
         logger.error(f"Configuration error: {e}")
-        return
+        return 1
 
     # Extract configuration values
     # Use base callsign (without SSID) for authentication
@@ -723,8 +774,10 @@ def main():
         aprsfi_api_key=aprsfi_api_key
     )
 
-    bridge.run_once()
+    # run_once() returns False only on a hard failure such as a connection or
+    # authentication error; deciding there's nothing to send is a success.
+    return 0 if bridge.run_once() else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

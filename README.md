@@ -67,8 +67,13 @@ You could use this script as a one-shot, or add it to your
 crontab with something like:
 
 ```
-*/15 * * * *  /home/kf6gpe/garmin-aprsis.py
+*/15 * * * * /home/kf6gpe/garmin-aprsis.py --quiet --log-file /home/kf6gpe/garmin-aprsis.log
 ```
+
+`--quiet` keeps routine progress off stderr, so cron only
+mails you when there's a warning or an error worth reading;
+`--log-file` keeps the full history anyway. The script exits
+non-zero when it couldn't do its job, so `||` works too.
 
 
 
@@ -85,8 +90,12 @@ It runs one-shot; to run it as a service you'll need
 to establish a crontab entry like this:
 
 ```
-*/30 * * * *  /home/kf6gpe/update-weather-aprsis.py
+*/30 * * * * /home/kf6gpe/update-weather-aprsis.py --quiet --log-file /home/kf6gpe/weather.log
 ```
+
+As with the Garmin bridge, `--quiet` leaves cron silent
+unless something went wrong, and `--log-file` records the
+full run for you to read later.
 
 This will run it every ten minutes. You should use a sensible interval for
 this so as not to flood the APRS-IS service with position and weather

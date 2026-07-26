@@ -5,18 +5,23 @@ Fetches weather data from Tempest and transmits to APRS-IS
 
 Run this script periodically for weather updates. On Linux, put something like
 
-*/10 * * * *  /home/kf6gpe/python-tempestwx-aprsis.py
+*/10 * * * * /home/kf6gpe/update-weather-aprsis.py --quiet --log-file /home/kf6gpe/weather.log
 
-in your crontab to run it every ten minutes.
+in your crontab to run it every ten minutes. --quiet keeps routine progress off
+stderr, so cron only mails you when there's a warning or an error to read;
+--log-file keeps the full history anyway. The script exits non-zero if it
+couldn't do its job.
 
 (C) 2026 Ray Rischpater, KF6GPE.
 This file provided under the MIT License.
 
 """
 
+import argparse
 import requests
 import json
 import socket
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
@@ -402,14 +407,59 @@ def load_config(config_path: str = None) -> dict:
     return config
 
 
-def main():
-    """Main entry point"""
+def configure_logging(quiet: bool = False, log_file: str = None):
+    """Route log output for interactive use or for cron.
+
+    Under cron, anything a job writes gets mailed to you, so a script that
+    chatters at INFO on every run mails you every run. With --quiet only
+    warnings and errors reach stderr, which leaves cron silent unless
+    something actually went wrong, while --log-file keeps the full history
+    somewhere you can read it afterwards.
+    """
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    if quiet:
+        for handler in root.handlers:
+            handler.setLevel(logging.WARNING)
+
+    if log_file:
+        try:
+            file_handler = logging.FileHandler(log_file)
+        except OSError as e:
+            logger.error(f"Cannot write log file {log_file}: {e}")
+            return
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        root.addHandler(file_handler)
+
+
+def parse_args(argv=None):
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Send Tempest weather station data to APRS-IS.")
+    parser.add_argument(
+        '-q', '--quiet', action='store_true',
+        help="Only write warnings and errors to stderr, so a cron job stays "
+             "silent unless something goes wrong.")
+    parser.add_argument(
+        '-l', '--log-file', metavar='PATH',
+        help="Append the full log, including routine INFO messages, to PATH.")
+    return parser.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    """Main entry point. Returns a process exit status: 0 on success."""
+    args = parse_args(argv)
+    configure_logging(quiet=args.quiet, log_file=args.log_file)
+
     # Load configuration from YAML file
     try:
         config = load_config()
     except (FileNotFoundError, ValueError) as e:
         logger.error(f"Configuration error: {e}")
-        return
+        return 1
 
     # Extract configuration values
     station_id = config['TempestStationID']
@@ -426,12 +476,17 @@ def main():
 
     success = bridge.transmit_weather(comment="Tempest Weather Station")
 
+    # These were prints, which go to stdout and so get mailed by cron on every
+    # single run regardless of log level. Logging them instead lets --quiet
+    # actually be quiet.
     if success:
-        print("Weather data transmitted to APRS-IS successfully!")
-        print("Check aprs.fi for your callsign to see the weather report.")
-    else:
-        print("Failed to transmit weather data")
+        logger.info("Weather data transmitted to APRS-IS successfully!")
+        logger.info("Check aprs.fi for your callsign to see the weather report.")
+        return 0
+
+    logger.error("Failed to transmit weather data")
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
