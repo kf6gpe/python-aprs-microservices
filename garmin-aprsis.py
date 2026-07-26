@@ -601,8 +601,9 @@ class GarminAPRSBridge:
         # most recent position until the device sends a new one.
         last_gated = self.state.load()
         if last_gated is not None and kml_position.timestamp <= last_gated:
-            logger.info(f"KML fix ({kml_position.timestamp.isoformat()}) is not newer than the "
-                        f"last one gated ({last_gated.isoformat()}), not transmitting")
+            logger.info(f"Nothing to do: this Garmin fix ({kml_position.timestamp.isoformat()}) "
+                        f"was already gated (last gated {last_gated.isoformat()}). The device "
+                        f"hasn't reported a new position since.")
             return False
 
         last_aprs_position = self.aprsfi_client.get_last_position(self.transmit_callsign)
@@ -621,27 +622,40 @@ class GarminAPRSBridge:
                 # First run since the state file was introduced: don't re-gate
                 # a position we can see we already sent.
                 if self._same_point(kml_position, last_aprs_position):
-                    logger.info("aprs.fi already shows this Garmin position, not transmitting")
+                    logger.info(f"Nothing to do: no state file yet, but the last packet for "
+                                f"{self.transmit_callsign} is one of ours at this same position, "
+                                f"so this Garmin fix ({kml_position.timestamp.isoformat()}) has "
+                                f"already been gated.")
                     return False
-                logger.info("No local state yet and aprs.fi shows a different Garmin "
-                            "position, transmitting")
+                logger.info(f"Transmitting: no state file yet, and the last packet for "
+                            f"{self.transmit_callsign} is one of ours at a different position, "
+                            f"so this Garmin fix ({kml_position.timestamp.isoformat()}) is new.")
             else:
-                logger.info(f"KML fix ({kml_position.timestamp.isoformat()}) is newer than the "
-                            f"last one gated ({last_gated.isoformat()}), transmitting")
+                logger.info(f"Transmitting: this Garmin fix "
+                            f"({kml_position.timestamp.isoformat()}) is newer than the last one "
+                            f"we gated ({last_gated.isoformat()}).")
             return True
 
         # Something other than this bridge is reporting for the callsign -- a
         # real radio, most likely. Its heard time is honest wall clock time, so
         # defer to it if it beat us to the punch rather than clobbering a live
         # position with a laggier Garmin fix.
+        other = f"comment {last_aprs_position.comment!r}" if last_aprs_position.comment \
+            else "no comment"
         if kml_position.timestamp > last_aprs_position.timestamp:
-            logger.info(f"KML position ({kml_position.timestamp.isoformat()}) is newer than the "
-                        f"last APRS position ({last_aprs_position.timestamp.isoformat()}), "
-                        f"transmitting")
+            logger.info(f"Transmitting: this Garmin fix "
+                        f"({kml_position.timestamp.isoformat()}) is newer than the last packet "
+                        f"heard from {self.transmit_callsign} "
+                        f"({last_aprs_position.timestamp.isoformat()}, {other}), which came from "
+                        f"something other than this bridge.")
             return True
 
-        logger.info(f"Last APRS position ({last_aprs_position.timestamp.isoformat()}) is newer "
-                    f"or equal to KML ({kml_position.timestamp.isoformat()}), not transmitting")
+        logger.info(f"Nothing to do: {self.transmit_callsign} was last heard at "
+                    f"{last_aprs_position.timestamp.isoformat()} ({other}) from something other "
+                    f"than this bridge -- a radio or app beaconing the same callsign. That is "
+                    f"more recent than this Garmin fix "
+                    f"({kml_position.timestamp.isoformat()}), which is the older of the two, so "
+                    f"sending it would move the position backwards. Leaving it alone.")
         return False
 
     @staticmethod
